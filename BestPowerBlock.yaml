@@ -37,8 +37,8 @@ fields:
             value: max
 
   resolution:
-    name: Forcast resolution
-    description: Set the forcast time resolution. 30 minutes is recommended.
+    name: Forecast resolution
+    description: Set the forecast time resolution. 30 minutes is recommended.
     default: 30
     required: true
     selector:
