@@ -36,46 +36,82 @@ fields:
           - label: Most expensive
             value: max
 
-  resolution:
-    name: Forecast resolution
-    description: Set the forecast time resolution. 30 minutes is recommended.
-    default: 30
-    required: true
-    selector:
-      select:
-        options:
-          - label: 5 minute
-            value: 5
-          - label: 30 minute
-            value: 30
-
 sequence:
   - variables:
-      intervals: "{{ block_size * 2 }}"
-      prices: >-
-        {{ state_attr(entity_id, 'forecasts') |
-        map(attribute='per_kwh') | list }}
-      averages: >
-        {% set data = namespace(averages=[]) %}  
-        {% for index in range(prices|count - intervals) %}
-          {% set data.averages = data.averages + [(prices[index:index+intervals] | average)] %}
-        {% endfor %} {{data.averages}}
-      interval_index: >
-        {% if min_max == "max" %}
-          {{averages.index(averages | max)}}
-        {% else %}  
-          {{averages.index(averages | min)}}
+    # Extract forecasts with their actual durations
+    forecasts: '{{ state_attr(entity_id, ''forecasts'') }}'
+
+    # Calculate total duration in hours (for reference)
+    total_duration_hours: '{{ forecasts | sum(attribute=''duration'') / 60 }}'
+
+    # Build a list of (price, duration) pairs
+    price_duration_pairs: >
+      {% set pairs = [] %}
+      {% for f in forecasts %}
+        {% set pairs = pairs + [(f.per_kwh, f.duration)] %}
+      {% endfor %}
+      {{ pairs }}
+
+    # Calculate weighted averages over sliding windows
+    # This assumes block_size is in 30-min blocks, and we need to find the cheapest block of that size
+    weighted_averages: >
+      {% set block_minutes = block_size * 30 %}
+      {% set results = [] %}
+      {% set pairs = price_duration_pairs %}
+  
+      {% for i in range(pairs|length) %}
+        {% set total_cost = 0 %}
+        {% set total_minutes = 0 %}
+        {% set j = i %}
+      
+        # Accumulate forecast entries until we reach block_minutes #
+        {% while j < pairs|length and total_minutes < block_minutes %}
+          {% set price = pairs[j][0] %}
+          {% set duration = pairs[j][1] %}
+          {% set minutes_to_take = [duration, (block_minutes - total_minutes)] | min %}
+          {% set total_cost = total_cost + (price * minutes_to_take) %}
+          {% set total_minutes = total_minutes + minutes_to_take %}
+          {% set j = j + 1 %}
+        {% endwhile %}
+      
+        # Only record if we got a full block #
+        {% if total_minutes >= block_minutes %}
+          {% set avg_price = total_cost / block_minutes %}
+          {% set results = results + [avg_price] %}
         {% endif %}
-      price: "{{(averages[interval_index] * 100) | round | int}}"
-      response:
-        block_size: "{{ block_size }}"
-        starts_in_hours: "{{ interval_index / 2 }}"
-        cents_per_kwh: "{{ price }}"
-        min_max: >
-          {% if min_max == "max" %}
-            max
-          {% else %}
-            min
-          {% endif %}
+      {% endfor %}
+      {{ results }}
+  
+    interval_index: >
+      {% if weighted_averages|length == 0 %}
+        0
+      {% elif min_max == "max" %}
+        {{ weighted_averages.index(weighted_averages | max) }}
+      {% else %}
+        {{ weighted_averages.index(weighted_averages | min) }}
+      {% endif %}
+  
+    price: '{{ (weighted_averages[interval_index] * 100) | round | int if weighted_averages else 0 }}'
+  
+    # Calculate when this block starts (in hours from now)
+    starts_in_hours: >
+      {% set pairs = price_duration_pairs %}
+      {% set total_minutes = 0 %}
+      {% set block_minutes = block_size * 30 %}
+      {% for i in range(interval_index) %}
+        {% set total_minutes = total_minutes + pairs[i][1] %}
+      {% endfor %}
+      {{ (total_minutes / 60) | round(1) }}
+  
+    response:
+      block_size: '{{ block_size }}'
+      starts_in_hours: '{{ starts_in_hours }}'
+      cents_per_kwh: '{{ price }}'
+      min_max: |
+        {% if min_max == "max" %}
+          max
+        {% else %}
+          min
+        {% endif %}
   - stop: Returning values
     response_variable: response
