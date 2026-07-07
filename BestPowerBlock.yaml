@@ -1,7 +1,7 @@
 # Copied from https://github.com/amberelectric/public-api/tree/main/home-assistant/blueprints and modified to fix
 # forcast price resolution that defaults to 10 x 5 minute intevals before going to 30 minute intervals.
 blueprint:
-  name: Best power price
+  name: Best forecast power price
   description: Returns the best average block of power. The block size is variable. You can ask for the minimum or maximum.
   domain: script
 
